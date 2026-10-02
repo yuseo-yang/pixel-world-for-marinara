@@ -928,7 +928,7 @@ $('#storyGo').onclick = () => {
     d.textContent = r.action ? `✔ "${r.sentence}" → ${r.who.join(', ') === '*' ? '모두' : r.who.join(', ')}: ${actLabel(r.action)} (키워드 '${r.keyword}')` : `— "${r.sentence}" → 반응 없음`; box.appendChild(d); }
 };
 function addByName(name) {
-  name = String(name || '').trim().slice(0, 8); if (!name || chars.some(c => c.def.name === name) || chars.length >= 8) return false;
+  name = String(name || '').trim().slice(0, 16); if (!name || chars.some(c => c.def.name === name) || chars.length >= 8) return false;
   const def = { id: nextId(), name, skin: pick(PAL.skin), hair: pick(PAL.hair), eye: pick(PAL.eye), hairStyle: pick(OPT.hairStyle)[0], top: pick(OPT.top)[0], topC: pick(PAL.cloth), bottom: pick(OPT.bottom)[0], botC: pick(PAL.cloth), hat: 'none', hatC: pick(PAL.cloth) };
   spawnChar(def, [-7, 14]); cast = chars.map(c => c.def); store.set('house.cast.v1', cast); renderCast(); renderScene(); return true;
 }

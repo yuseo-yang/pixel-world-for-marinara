@@ -7,7 +7,7 @@ import { mount } from '../../src/app.js';
   if (window.__pixelWorldExt) { try { window.__pixelWorldExt.destroy(); } catch (e) { /* ignore */ } }
   const KEY = 'pixelworld.ext.v1';
   const load = () => { try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } };
-  const cfg = Object.assign({ field: '행동,자세,상태,action,pose,activity,posture', chatId: '', poll: true, sec: 3, autoAdd: true, w: 760, h: 480 }, load());
+  const cfg = Object.assign({ field: '자세,행동,posture,pose,action,activity', chatId: '', poll: true, sec: 3, autoAdd: true, w: 760, h: 480 }, load());
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(cfg)); } catch (e) { /* ignore */ } };
   const log = (...a) => { try { (window.marinara && window.marinara.log ? window.marinara.log.info : console.log)('[pixel-world]', ...a); } catch (e) { console.log('[pixel-world]', ...a); } };
 
@@ -66,6 +66,8 @@ import { mount } from '../../src/app.js';
   $('#pw-now').onclick = () => { last.clear(); readTracker(true); };
 
   // ---------- tracker reader ----------
+  const SEP = new Set('·:：/|()[]-–—,'.split(''));
+  const cleanName = (t) => t.split('').map(ch => SEP.has(ch) ? ' ' : ch).join('').split(' ').filter(Boolean).join(' ').slice(0, 16);
   const last = new Map();      // tracker character name -> last text we reacted to
   let busy = false, timer = null;
   async function findChatId() {
@@ -83,21 +85,32 @@ import { mount } from '../../src/app.js';
       const id = await findChatId(); if (!id) { dot('채팅을 찾지 못했어요'); return; }
       const r = await fetch('/api/chats/' + encodeURIComponent(id) + '/game-state', { credentials: 'same-origin' });
       if (!r.ok) { dot('트래커 읽기 실패 (' + r.status + ')'); return; }
-      const gs = await r.json(); if (!gs) { dot('트래커 데이터가 아직 없어요 (캐릭터 트래커를 켜 주세요)'); return; }
+      const gs = await r.json(); if (!gs) { dot('트래커 데이터가 아직 없어요 (트래커 에이전트를 켜 주세요)'); return; }
       const want = cfg.field.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
-      const present = gs.presentCharacters || []; let seen = 0;
-      for (const pc of present) {
-        const fields = pc.customFields || {}; let text = '';
-        for (const k of Object.keys(fields)) if (want.includes(k.toLowerCase()) && fields[k]) { text = String(fields[k]); break; }
-        if (!text) continue; seen++;
-        if (last.get(pc.name) === text) continue; last.set(pc.name, text);
-        if (!app.chars.some(c => c.def.name === pc.name)) { if (cfg.autoAdd && app.addByName(pc.name)) note(`섬에 ${pc.name} 추가`); else { note(`섬에 '${pc.name}'이(가) 없어요`); continue; } }
-        const hits = app.interpret(text).filter(x => x.action), hit = hits[hits.length - 1];
-        if (hit) { app.do(pc.name, hit.action); note(`${pc.name} ← "${text.slice(0, 30)}" → ${hit.action} ('${hit.keyword}')`); log('tracker', pc.name, text, hit.action); }
-        else note(`${pc.name} ← "${text.slice(0, 30)}" → 해당 행동 없음`);
+      // gather every tracker field we can find: per-character custom fields, Custom Tracker rows, world custom fields
+      const rows = [];
+      for (const pc of gs.presentCharacters || []) for (const k of Object.keys(pc.customFields || {})) rows.push({ owner: pc.name, key: k, value: pc.customFields[k] });
+      for (const f of (gs.playerStats && gs.playerStats.customTrackerFields) || []) rows.push({ owner: null, key: f.name, value: f.value });
+      for (const f of gs.worldCustomFields || []) rows.push({ owner: null, key: f.name, value: f.value });
+      // a row counts when its name contains a wanted word; for flat rows the rest of the name is the character ("미나 자세", "Dick Grayson · 자세")
+      const byOwner = new Map();
+      for (const row of rows) {
+        const key = String(row.key || ''), low = key.toLowerCase(), val = row.value == null ? '' : String(row.value);
+        const kw = want.find(w => low.includes(w)); if (!kw || !val) continue;
+        let owner = row.owner;
+        if (!owner) { const at = low.indexOf(kw); owner = cleanName(key.slice(0, at) + ' ' + key.slice(at + kw.length)); }
+        if (!owner) continue;
+        byOwner.set(owner, (byOwner.get(owner) ? byOwner.get(owner) + '. ' : '') + val);
       }
-      dot(`트래커 연결됨 · 캐릭터 ${present.length}명 · '${want[0]}' 필드 ${seen}명`);
-      if (verbose && !seen) note(`'${cfg.field}' 이름의 캐릭터 트래커 필드를 찾지 못했어요`);
+      for (const [name, text] of byOwner) {
+        if (last.get(name) === text) continue; last.set(name, text);
+        if (!app.chars.some(c => c.def.name === name)) { if (cfg.autoAdd && app.addByName(name)) note('섬에 ' + name + ' 추가'); else { note("섬에 '" + name + "'이(가) 없어요"); continue; } }
+        const hits = app.interpret(text).filter(x => x.action), hit = hits[hits.length - 1];
+        if (hit) { app.do(name, hit.action); note(name + ' ← "' + text.slice(0, 30) + '" → ' + hit.action + " ('" + hit.keyword + "')"); log('tracker', name, text, hit.action); }
+        else note(name + ' ← "' + text.slice(0, 30) + '" → 해당 행동 없음');
+      }
+      dot('트래커 연결됨 · 필드 ' + rows.length + '개 중 행동 ' + byOwner.size + '명');
+      if (verbose && !byOwner.size) note("'" + cfg.field + "' 단어가 들어간 필드가 없어요. 찾은 필드: " + rows.map(x => x.key).slice(0, 12).join(', '));
     } catch (e) { dot('트래커 읽기 오류: ' + e.message); } finally { busy = false; }
   }
   function schedule() { clearInterval(timer); if (cfg.poll) timer = setInterval(() => { if (!document.hidden) readTracker(false); }, cfg.sec * 1000); }

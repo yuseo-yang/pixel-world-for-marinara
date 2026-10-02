@@ -2,8 +2,8 @@
   "kind": "marinara.personal-extension",
   "version": 1,
   "config": {
-    "name": "Pixel World (test)",
-    "version": "0.1.0",
+    "name": "Pixel World",
+    "version": "0.2.0",
     "runtime": "client",
     "capabilities": ["full_page_access"],
     "jsPath": "extension.js"

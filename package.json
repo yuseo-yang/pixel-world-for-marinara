@@ -1,0 +1,13 @@
+{
+  "name": "pixel-world-for-marinara",
+  "private": true,
+  "version": "0.2.0",
+  "description": "Voxel pixel-art house with pixel characters; runs standalone (index.html) or inside Marinara as an extension bundle.",
+  "scripts": {
+    "build:ext": "node tools/build-ext.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "three": "0.160.0"
+  }
+}

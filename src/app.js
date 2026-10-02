@@ -96,6 +96,7 @@ const HTML = `<div class="pw"><canvas id="gl" class="gl"></canvas>
     <h2>🎬 장면 테스트</h2>
     <h3>누구에게?</h3><select id="sceneWho"></select>
     <h3>이동</h3><div class="row" id="sceneGo"></div>
+    <h3>장소 (선택)</h3><select id="scenePlace"></select>
     <h3>행동</h3><div class="row" id="sceneAct"></div>
     <h3>이야기 읽기 테스트</h3>
     <textarea id="storyIn" rows="4" placeholder="예) 모리는 소파에 앉아 TV를 봤다. 별이는 졸려서 침대로 갔다." style="width:100%;box-sizing:border-box;background:rgba(0,0,0,.3);color:#fff;border:2px solid var(--bd);padding:6px 8px;font:inherit;font-size:13px;resize:vertical"></textarea>
@@ -560,10 +561,39 @@ const ACTION_WORDS = [
   ['out', ['외출', '나갔', '나가', '산책', '집을 나', '장보']],
   ['chat', ['대화', '수다', '얘기', '말을 걸', '이야기를 나', '속삭']],
 ];
-// weaker hints: where someone is, when no activity word matched
-const PLACE_WORDS = [['sleep', ['침대', '이불']], ['tv', ['소파']], ['eat', ['식탁']], ['cook', ['싱크대', '가스레인지', '레인지']], ['bath', ['욕조']], ['wash', ['세면대', '세탁기']], ['read', ['책장', '서재']], ['view', ['창가']]];
 const NSFW_WORDS = ['섹스', '성관계', '정사', '잠자리를', '몸을 섞', '애무', '알몸', '나체', '옷을 벗', '벗겼', '절정', '삽입', '쾌감', '오르가', 'sex', 'nsfw', 'naked', 'orgasm', 'moan'];
-const ROOM_WORDS = [['goto_kitchen', ['주방', '부엌']], ['goto_living', ['거실']], ['goto_bedroom', ['안방', '침실']], ['goto_bath', ['화장실', '욕실']]];
+// where it happens: furniture first, then rooms
+const PLACES = [
+  ['table', ['식탁', '밥상']], ['bed', ['침대', '이불']], ['sofa', ['소파']], ['bathtub', ['욕조', '욕탕']], ['vanity', ['세면대']], ['washer', ['세탁기']],
+  ['sink', ['싱크대']], ['stove', ['가스레인지', '레인지']], ['bookshelf', ['책장', '서재']], ['armchair', ['안락의자']], ['wardrobe', ['옷장']], ['door', ['현관', '문 앞']], ['window', ['창가', '창문']],
+  ['living', ['거실']], ['kitchen', ['주방', '부엌']], ['bedroom', ['안방', '침실']], ['bath', ['화장실', '욕실']],
+];
+const PLACE_INFO = { table: { furn: ['table'], kinds: ['eat'] }, bed: { furn: ['bed'], kinds: ['sleep'] }, sofa: { furn: ['sofa'], kinds: ['tv'] }, bathtub: { furn: ['bathtub'], kinds: ['bath'] }, vanity: { furn: ['vanity'], kinds: ['wash'] }, washer: { furn: ['washer'], kinds: ['wash'] }, sink: { furn: ['sink'], kinds: ['cook'] }, stove: { furn: ['stove'], kinds: ['cook'] }, bookshelf: { furn: ['bookshelf'], kinds: ['read'] }, armchair: { furn: ['armchair'], kinds: ['read'] }, wardrobe: { furn: ['wardrobe'], kinds: ['dress'] }, door: { kinds: ['out'] }, window: { kinds: ['view'] }, living: { room: 'living' }, kitchen: { room: 'kitchen' }, bedroom: { room: 'bedroom' }, bath: { room: 'bath' } };
+const PLACE_KO = { table: '식탁', bed: '침대', sofa: '소파', bathtub: '욕조', vanity: '세면대', washer: '세탁기', sink: '싱크대', stove: '가스레인지', bookshelf: '책장', armchair: '안락의자', wardrobe: '옷장', door: '현관', window: '창가', living: '거실', kitchen: '주방', bedroom: '안방', bath: '화장실' };
+const placeOf = (text) => { const low = String(text).toLowerCase(); for (const [id, ws] of PLACES) if (ws.some(w => low.includes(w))) return id; return null; };
+const placeIsRoom = (id) => !!(PLACE_INFO[id] && PLACE_INFO[id].room);
+const layoutOf = (id) => LAYOUT.find(o => o.id === id);
+function placeSpots(place) {          // activity spots that belong to this place
+  const inf = PLACE_INFO[place]; if (!inf) return [];
+  if (inf.room) return SPOTS.filter(s => roomOf(s.at[0], s.at[1]) === inf.room);
+  let list = []; if (inf.furn) list = SPOTS.filter(s => { const it = s.owner && layoutOf(s.owner); return it && inf.furn.includes(it.type); });
+  if (!list.length && inf.kinds) list = SPOTS.filter(s => inf.kinds.includes(s.kind));
+  return list;
+}
+function placeCells(place) {          // free standing cells at/near this place (nearest first for furniture)
+  const inf = PLACE_INFO[place]; if (!inf) return [];
+  if (inf.room) return roomCells[inf.room].slice();
+  if (place === 'door') return [[-8, 15], [-7, 15], [-9, 14], [-8, 14], [-7, 14]].filter(([i, j]) => isWalk(i, j));
+  if (place === 'window') return SPOTS.filter(s => s.kind === 'view').map(s => s.at);
+  const cells = [];
+  for (const it of LAYOUT) if (inf.furn && inf.furn.includes(it.type)) { const f = footprint(it), cx = (f.i0 + f.i1) / 2, cz = (f.j0 + f.j1) / 2; for (let i = f.i0 - 1; i <= f.i1 + 1; i++) for (let j = f.j0 - 1; j <= f.j1 + 1; j++) if ((i < f.i0 || i > f.i1 || j < f.j0 || j > f.j1) && isWalk(i, j)) cells.push([i, j, Math.hypot(i - cx, j - cz)]); }
+  cells.sort((a, b) => a[2] - b[2]); return cells.map(c => [c[0], c[1]]);
+}
+function pairCells(list, random) {
+  if (!list || list.length < 2) return null;
+  const a = random ? list[Math.floor(Math.random() * list.length)] : list[Math.floor(Math.random() * Math.min(list.length, 4))];
+  const b = list.find(x => x !== a && Math.hypot(x[0] - a[0], x[1] - a[1]) <= 1.5) || list.find(x => x !== a); return b ? [a, b] : null;
+}
 function interpret(text) {
   const out = [];
   for (const m of String(text).matchAll(/[^.!?\n]+[.!?]?/g)) {
@@ -571,18 +601,19 @@ function interpret(text) {
     let action = null, kw = null;
     const adult = NSFW_WORDS.find(w => low.includes(w)); if (adult) { action = 'intimate'; kw = adult; }
     if (!action) for (const [a, ws] of ACTION_WORDS) { const w = ws.find(w => low.includes(w)); if (w) { action = a; kw = w; break; } }
-    if (!action) for (const [a, ws] of PLACE_WORDS) { const w = ws.find(w => low.includes(w)); if (w) { action = a; kw = w; break; } }
-    if (!action) for (const [a, ws] of ROOM_WORDS) { const w = ws.find(w => low.includes(w)); if (w) { action = a; kw = w; break; } }
+    let place = null, pkw = null;
+    for (const [id, ws] of PLACES) { const w = ws.find(w => low.includes(w)); if (w) { place = id; pkw = w; break; } }
+    if (!action && place) { const inf = PLACE_INFO[place]; action = inf.room ? 'goto_' + inf.room : inf.kinds[0]; kw = pkw; }
     const names = chars.filter(c => sent.includes(c.def.name)).map(c => c.def.name);
-    out.push({ sentence: sent, who: names.length ? names : ['*'], action, keyword: kw });
+    out.push({ sentence: sent, who: names.length ? names : ['*'], action, keyword: kw, place, placeKeyword: pkw });
   }
   return out;
 }
 function applyStory(text) {
   const res = interpret(text);
   for (const r of res) if (r.action) {
-    if (r.action === 'intimate') { if (r.who[0] !== '*') doAction(r.who[0], 'intimate', r.who[1]); }
-    else if (r.action === 'chat' && r.who.length >= 2) doAction(r.who[0], 'chat', r.who[1]); else for (const w of r.who) doAction(w, r.action);
+    if (r.action === 'intimate') { if (r.who[0] !== '*') doAction(r.who[0], 'intimate', r.who[1], r.place); }
+    else if (r.action === 'chat' && r.who.length >= 2) doAction(r.who[0], 'chat', r.who[1], r.place); else for (const w of r.who) doAction(w, r.action, undefined, r.place);
   }
   return res;
 }
@@ -805,18 +836,22 @@ function stepChars(t, dt) {
 
 // ---------- external commands ----------
 function findChars(who) { if (!who || who === '*' || who === 'all') return chars.slice(); return chars.filter(c => c.def.name === who || c.def.id === who); }
-function doAction(who, action, partner) {
+function doAction(who, action, partner, place) {
   const targets = findChars(who); if (!targets.length) return false;
   for (const c of targets) {
     if (action === 'chat') {
       const o = (partner && findChars(partner)[0]) || chars.filter(x => x !== c && !x.hidden).sort((p, q) => Math.hypot(p.pos.x - c.pos.x, p.pos.z - c.pos.z) - Math.hypot(q.pos.x - c.pos.x, q.pos.z - c.pos.z))[0]; if (!o) continue;
       leaveSpot(o); o.state = 'idle'; o.timer = 3; const [oi, oj] = pos2(o); const near = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]].map(([a, b]) => [oi + a, oj + b]).filter(([i, j]) => isWalk(i, j));
-      if (near.length && goCell(c, ...near[0], '대화하러 가는 중', true)) { c.kind = 'chat'; c.partner = o; c.chatCd = 0; o.chatCd = 0; }
+      const pc = place ? pairCells(placeCells(place), placeIsRoom(place)) : null;
+      if (pc) { for (const [p, cell, mate] of [[c, pc[0], o], [o, pc[1], c]]) { const ok = goCell(p, cell[0], cell[1], PLACE_KO[place] + '에서 대화하러 가는 중', true); p.kind = 'chat'; p.partner = mate; p.chatCd = 0; if (!ok) { p.plan = { spot: null }; arrive(p); } } }
+      else if (near.length && goCell(c, ...near[0], '대화하러 가는 중', true)) { c.kind = 'chat'; c.partner = o; c.chatCd = 0; o.chatCd = 0; }
     } else if (action === 'intimate') {
       if (c.kind === 'intimate' && c.state !== 'idle') continue;
       const o = (partner && findChars(partner)[0]) || chars.filter(x => x !== c && !x.hidden).sort((p, q) => Math.hypot(p.pos.x - c.pos.x, p.pos.z - c.pos.z) - Math.hypot(q.pos.x - c.pos.x, q.pos.z - c.pos.z))[0]; if (!o || o === c) continue;
-      const bed = SPOTS.find(s => s.kind === 'sleep'), base = bed ? bed.walk : [0, 3];
-      const cells = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1]].map(([a, b]) => [base[0] + a, base[1] + b]).filter(([i, j]) => isWalk(i, j)); if (cells.length < 2) continue;
+      // where: the place named in the text (sofa, table, bathtub, a room...); with no place, beside the bed
+      let cells = place ? pairCells(placeCells(place), placeIsRoom(place)) : null;
+      if (!cells) { const bed = SPOTS.find(s => s.kind === 'sleep'), base = bed ? bed.walk : [0, 3]; cells = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1]].map(([a, b]) => [base[0] + a, base[1] + b]).filter(([i, j]) => isWalk(i, j)); }
+      if (cells.length < 2) continue;
       for (const [p, cell, mate] of [[c, cells[0], o], [o, cells[1], c]]) {
         const ok = goCell(p, cell[0], cell[1], '둘만의 시간 (19♥)', true); p.kind = 'intimate'; p.partner = mate; p.chatCd = 90;
         if (!ok) { p.plan = { spot: null }; arrive(p); }
@@ -824,12 +859,14 @@ function doAction(who, action, partner) {
     } else if (action.startsWith('goto_')) {
       const room = action.slice(5), list = roomCells[room]; if (!list) continue; const [ti, tj] = pick(list); goCell(c, ti, tj, ROOM_KO[room] + '(으)로 이동 중', true);
     } else if (ACT_KINDS.includes(action)) {
-      const all = SPOTS.filter(s => s.kind === action), free = all.filter(s => !occupied(s, c)); goSpot(c, pick(free.length ? free : all), true);
+      let all = SPOTS.filter(s => s.kind === action);
+      if (place) { const ps = placeSpots(place), narrowed = all.filter(s => ps.includes(s)); if (narrowed.length) all = narrowed; }   // prefer the spot at the named place
+      const free = all.filter(s => !occupied(s, c)); goSpot(c, pick(free.length ? free : all), true);
     }
   }
   return true;
 }
-const onMsg = (e) => { const d = e.data; if (d && d.type === 'scene' && typeof d.action === 'string') doAction(d.who, d.action); else if (d && d.type === 'story' && typeof d.text === 'string') applyStory(d.text); }; window.addEventListener('message', onMsg);
+const onMsg = (e) => { const d = e.data; if (d && d.type === 'scene' && typeof d.action === 'string') doAction(d.who, d.action, d.partner, d.place); else if (d && d.type === 'story' && typeof d.text === 'string') applyStory(d.text); }; window.addEventListener('message', onMsg);
 
 // =====================================================================
 // overlay (bubbles / names / room tags)
@@ -931,7 +968,8 @@ requestAnimationFrame(drawPreview);
 // --- scene tester ---
 function renderScene() {
   const sel = $('#sceneWho'), keep = sel.value; sel.innerHTML = '<option value="*">모두</option>' + chars.map(c => `<option value="${c.def.id}">${c.def.name}</option>`).join(''); if ([...sel.options].some(o => o.value === keep)) sel.value = keep;
-  const mk = (el, obj, pre) => { el.innerHTML = ''; for (const k in obj) { const b = document.createElement('button'); b.className = 'chip'; b.textContent = obj[k]; b.onclick = () => doAction(sel.value, pre + k); el.appendChild(b); } };
+  const pl = $('#scenePlace'); if (!pl.options.length) pl.innerHTML = '<option value="">장소 지정 안 함</option>' + Object.keys(PLACE_KO).map(k => '<option value="' + k + '">' + PLACE_KO[k] + '</option>').join('');
+  const mk = (el, obj, pre) => { el.innerHTML = ''; for (const k in obj) { const b = document.createElement('button'); b.className = 'chip'; b.textContent = obj[k]; b.onclick = () => doAction(sel.value, pre + k, undefined, pre === 'goto_' ? undefined : (pl.value || undefined)); el.appendChild(b); } };
   mk($('#sceneGo'), GO_KO, 'goto_'); mk($('#sceneAct'), ACT_KO, '');
 }
 $('#storyEx').onclick = () => { $('#storyIn').value = chars.slice(0, 3).map((c, n) => [c.def.name + '는 소파에 앉아 TV를 봤다.', c.def.name + '는 졸려서 침대로 가서 잠들었다.', c.def.name + '는 주방에서 요리를 시작했다.'][n]).join('\n'); };
@@ -939,7 +977,7 @@ $('#storyGo').onclick = () => {
   const res = applyStory($('#storyIn').value), box = $('#storyOut'); box.innerHTML = '';
   if (!res.length) { box.textContent = '읽을 문장이 없어요.'; return; }
   for (const r of res) { const d = document.createElement('div'); d.style.cssText = 'padding:4px 0;border-top:1px solid rgba(255,255,255,.15)';
-    d.textContent = r.action ? `✔ "${r.sentence}" → ${r.who.join(', ') === '*' ? '모두' : r.who.join(', ')}: ${actLabel(r.action)} (키워드 '${r.keyword}')` : `— "${r.sentence}" → 반응 없음`; box.appendChild(d); }
+    d.textContent = r.action ? `✔ "${r.sentence}" → ${r.who.join(', ') === '*' ? '모두' : r.who.join(', ')}: ${actLabel(r.action)} (키워드 '${r.keyword}'${r.place ? ', 장소 ' + PLACE_KO[r.place] : ''})` : `— "${r.sentence}" → 반응 없음`; box.appendChild(d); }
 };
 function addByName(name) {
   name = String(name || '').trim().slice(0, 16); if (!name || chars.some(c => c.def.name === name) || chars.length >= 8) return false;
@@ -996,7 +1034,7 @@ function frame() {
 }
 renderer.setAnimationLoop(frame);
 const onResize = () => { if (!VW() || !VH()) return; renderer.setSize(VW(), VH()); composer.setSize(VW(), VH()); camera.aspect = VW() / VH(); camera.updateProjectionMatrix(); }; const ro = new ResizeObserver(onResize); ro.observe(R);
-const api = { addByName, do: doAction, chars, setMode: (m) => { mode = m; stepEnv(0, true); applySettings(); }, KEYWORDS, interpret, applyStory, tick: (sec, dt = 0.05) => { for (let q = 0; q < sec / dt; q++) { T += dt; stepChars(T, dt); } return chars.map(c => c.def.name + ':' + c.state + ':' + c.kind + ':' + c.pos.x.toFixed(1) + ',' + c.pos.z.toFixed(1)).join(' '); }, camera, controls, showPanel, layout: LAYOUT, catalog: CATALOG, rebuild: rebuildFurniture, move: moveFurniture, add: addFurniture, remove: removeFurniture, spots: () => SPOTS };
+const api = { addByName, placeOf, placeIsRoom, do: doAction, chars, setMode: (m) => { mode = m; stepEnv(0, true); applySettings(); }, KEYWORDS, interpret, applyStory, tick: (sec, dt = 0.05) => { for (let q = 0; q < sec / dt; q++) { T += dt; stepChars(T, dt); } return chars.map(c => c.def.name + ':' + c.state + ':' + c.kind + ':' + c.pos.x.toFixed(1) + ',' + c.pos.z.toFixed(1)).join(' '); }, camera, controls, showPanel, layout: LAYOUT, catalog: CATALOG, rebuild: rebuildFurniture, move: moveFurniture, add: addFurniture, remove: removeFurniture, spots: () => SPOTS };
 api.destroy = () => { alive = false; renderer.setAnimationLoop(null); ro.disconnect(); clearInterval(castTimer); window.removeEventListener('message', onMsg); for (const c of [...chars]) removeChar(c); renderer.dispose(); sr.innerHTML = ''; if (opts.global && window[opts.global] === api) delete window[opts.global]; };
 api.resize = onResize;
 if (opts.global) window[opts.global] = api;

@@ -102,11 +102,14 @@ import { mount } from '../../src/app.js';
         if (!owner) continue;
         byOwner.set(owner, (byOwner.get(owner) ? byOwner.get(owner) + '. ' : '') + val);
       }
+      let roomHint = null;
+      for (const row of rows) { const k = String(row.key || '').toLowerCase(); if ((k.includes('장소') || k.includes('위치') || k.includes('location')) && row.value) { const pl = app.placeOf(String(row.value)); if (pl && app.placeIsRoom(pl)) { roomHint = pl; break; } } }
       for (const [name, text] of byOwner) {
-        if (last.get(name) === text) continue; last.set(name, text);
+        const sig = text + '|' + roomHint; if (last.get(name) === sig) continue; last.set(name, sig);
         if (!app.chars.some(c => c.def.name === name)) { if (cfg.autoAdd && app.addByName(name)) note('섬에 ' + name + ' 추가'); else { note("섬에 '" + name + "'이(가) 없어요"); continue; } }
         const hits = app.interpret(text).filter(x => x.action), hit = hits[hits.length - 1];
-        if (hit) { app.do(name, hit.action, hit.action === 'intimate' ? hit.who.find(n => n !== name && n !== '*') : undefined); note(name + ' ← "' + text.slice(0, 30) + '" → ' + hit.action + " ('" + hit.keyword + "')"); log('tracker', name, text, hit.action); }
+        const place = hit && (hit.place || roomHint);
+        if (hit) { app.do(name, hit.action, (hit.action === 'intimate' || hit.action === 'chat') ? hit.who.find(n => n !== name && n !== '*') : undefined, place); note(name + ' ← "' + text.slice(0, 30) + '" → ' + hit.action + (place ? ' @' + place : '') + " ('" + hit.keyword + "')"); log('tracker', name, text, hit.action); }
         else note(name + ' ← "' + text.slice(0, 30) + '" → 해당 행동 없음');
       }
       dot('트래커 연결됨 · 필드 ' + rows.length + '개 중 행동 ' + byOwner.size + '명');

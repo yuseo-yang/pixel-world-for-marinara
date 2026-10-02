@@ -3,7 +3,7 @@
   "version": 1,
   "config": {
     "name": "Pixel World",
-    "version": "0.2.2",
+    "version": "0.2.3",
     "runtime": "client",
     "capabilities": ["full_page_access"],
     "jsPath": "extension.js"

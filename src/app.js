@@ -5,6 +5,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { VignetteShader } from 'three/addons/shaders/VignetteShader.js';
+import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 const CSS = `.pw { position: relative; width: 100%; height: 100%; overflow: hidden; background: #2a1d4a; color: #fff; font-family: "Malgun Gothic", "Apple SD Gothic Neo", sans-serif; }
@@ -113,6 +114,12 @@ const HTML = `<div class="pw"><canvas id="gl" class="gl"></canvas>
     <label class="tg">방 이름표<input type="checkbox" id="setRoomTag" checked></label>
     <label class="tg">이름표 항상 보기<input type="checkbox" id="setNames"></label>
     <label class="tg">빛 번짐(블룸)<input type="checkbox" id="setBloom" checked></label>
+    <h3>배경</h3>
+    <div class="row" id="bgSwatches"></div>
+    <div class="row" style="margin-top:6px"><input type="color" id="bgColor"><span style="font-size:12px">배경 색 직접 고르기</span></div>
+    <div class="row" style="margin-top:8px"><button class="btn sub" id="bgImgBtn">🖼 이미지 넣기</button><button class="btn sub" id="bgImgClear">이미지 지우기</button><input type="file" id="bgFile" accept="image/*" style="display:none"></div>
+    <div id="bgImgOpts" style="display:none;margin-top:8px"><div class="row"><button class="chip" data-bm="cover">꽉 채우기</button><button class="chip" data-bm="tile">무늬로 반복</button></div><div style="font-size:12px;margin-top:8px">무늬 크기 <span id="bgTileVal">160</span>px</div><input type="range" id="bgTile" min="40" max="600" step="10" value="160"></div>
+    <h3>성능</h3><div class="row" id="setQuality"></div><div style="font-size:11px;opacity:.7;margin-top:4px;line-height:1.5">버벅이면 '낮음'을 쓰세요 (30프레임, 그림자·번짐 끔).</div>
     <h3>움직임</h3>
     <label class="tg">스스로 움직이기<input type="checkbox" id="setAuto" checked></label>
     <label class="tg">카메라 천천히 회전<input type="checkbox" id="setRotate"></label>
@@ -128,7 +135,7 @@ export function mount(host, opts = {}) {
   sr.innerHTML = `<style>${CSS}</style>${HTML}`;
   const R = sr.querySelector('.pw'), $ = (s) => sr.querySelector(s), $$ = (s) => sr.querySelectorAll(s);
   const VW = () => R.clientWidth || 800, VH = () => R.clientHeight || 450;
-  let alive = true;
+  let alive = true, shadowDirty = 10, paused = false;
 
 
 // =====================================================================
@@ -173,9 +180,9 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(VW(), VH());
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap; renderer.shadowMap.autoUpdate = false;   // sprites cast no shadows, so the map only needs refreshing when furniture / light changes
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x8d5aa8, 0.008);
+renderer.setClearColor(0x000000, 0);
 const camera = new THREE.PerspectiveCamera(36, VW() / VH(), 0.5, 1800);
 camera.position.set(0, 19, 31);
 const controls = new OrbitControls(camera, renderer.domElement);
@@ -194,46 +201,13 @@ const PRE = {
 };
 const clone = (p) => { const o = {}; for (const k in p) o[k] = p[k].clone ? p[k].clone() : p[k]; return o; };
 const cur = clone(PRE.dusk);
-const settings = Object.assign({ mode: 'dusk', bubble: true, roomtag: true, names: false, bloom: true, auto: true, rotate: false, speed: 1 }, store.get('house.settings.v1', {}));
+const settings = Object.assign({ mode: 'dusk', bubble: true, roomtag: true, names: false, bloom: true, auto: true, rotate: false, speed: 1, quality: 'mid', bgColor: '#241a3a', bgMode: 'cover', bgTile: 160 }, store.get('house.settings.v1', {}));
 let mode = settings.mode;
 Object.assign(cur, clone(PRE[mode]));
 function stepEnv(dt, snap) {
   const t = PRE[mode], k = snap ? 1 : 1 - Math.exp(-dt * 2.2);
   for (const key in cur) { const a = cur[key], b = t[key]; if (typeof a === 'number') cur[key] = a + (b - a) * k; else a.lerp(b, k); }
 }
-
-// =====================================================================
-// sky / stars / mist sea / clouds
-// =====================================================================
-const skyMat = new THREE.ShaderMaterial({
-  side: THREE.BackSide, depthWrite: false, fog: false,
-  uniforms: { top: { value: cur.top }, mid: { value: cur.mid }, hor: { value: cur.hor }, sunDir: { value: cur.sun }, disc: { value: cur.disc }, discK: { value: 1 } },
-  vertexShader: `varying vec3 vD; void main(){ vD = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-  fragmentShader: `uniform vec3 top, mid, hor, sunDir, disc; uniform float discK; varying vec3 vD;
-    void main(){ vec3 d = normalize(vD); float h = d.y;
-      vec3 c = mix(hor, mid, smoothstep(-0.02, 0.2, h)); c = mix(c, top, smoothstep(0.12, 0.7, h));
-      float s = max(dot(d, normalize(sunDir)), 0.0);
-      c += disc * (pow(s, 14.0) * 0.5 + pow(s, 160.0) * 0.5) * discK;
-      c += disc * smoothstep(0.9988, 0.9992, s) * 2.5 * discK;
-      gl_FragColor = vec4(c, 1.0); }`,
-});
-scene.add(new THREE.Mesh(new THREE.SphereGeometry(1000, 32, 16), skyMat));
-const starGeo = new THREE.BufferGeometry(); { const n = 1500, p = new Float32Array(n * 3); for (let i = 0; i < n; i++) { const u = rnd(), v = rnd() * 0.97 + 0.03, th = u * Math.PI * 2, r = Math.sqrt(1 - v * v); p.set([Math.cos(th) * r * 900, v * 900, Math.sin(th) * r * 900], i * 3); } starGeo.setAttribute('position', new THREE.BufferAttribute(p, 3)); }
-const starMat = new THREE.PointsMaterial({ color: 0xdfe6ff, size: 2.2, sizeAttenuation: false, transparent: true, opacity: 0.3, depthWrite: false, fog: false });
-scene.add(new THREE.Points(starGeo, starMat));
-const seaTex = (() => { const c = document.createElement('canvas'); c.width = c.height = 256; const x = c.getContext('2d'); x.fillStyle = '#e6e6e6'; x.fillRect(0, 0, 256, 256);
-  const r = mulberry32(5); for (let i = 0; i < 260; i++) { const px = r() * 256, py = r() * 256, rad = 14 + r() * 40, l = r() < .5 ? 255 : 196; for (const ox of [-256, 0, 256]) for (const oy of [-256, 0, 256]) { const g = x.createRadialGradient(px + ox, py + oy, 0, px + ox, py + oy, rad); g.addColorStop(0, `rgba(${l},${l},${l},.22)`); g.addColorStop(1, `rgba(${l},${l},${l},0)`); x.fillStyle = g; x.fillRect(px + ox - rad, py + oy - rad, rad * 2, rad * 2); } }
-  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(22, 22); t.colorSpace = THREE.SRGBColorSpace; return t; })();
-const seaMat = new THREE.MeshBasicMaterial({ map: seaTex, color: 0x9a70b8 });
-const sea = new THREE.Mesh(new THREE.CircleGeometry(1300, 48), seaMat); sea.rotation.x = -Math.PI / 2; sea.position.y = -26; scene.add(sea);
-const clouds = [];
-{ const cm = new THREE.MeshStandardMaterial({ roughness: 1, metalness: 0 });
-  for (let n = 0; n < 30; n++) {
-    const a = rnd() * Math.PI * 2, dist = 30 + rnd() * 120, base = 5 + rnd() * 7, v = new Voxels(1.5), rx = base * (1 + rnd() * .6), rz = base * (0.8 + rnd() * .5);
-    for (let L = 0; L < 5; L++) { const f = 1 - L * 0.19, ox = (rnd() - .5) * 2, oz = (rnd() - .5) * 2;
-      for (let i = -Math.ceil(rx); i <= Math.ceil(rx); i++) for (let j = -Math.ceil(rz); j <= Math.ceil(rz); j++) { const d = Math.hypot((i - ox) / (rx * f), (j - oz) / (rz * f)) + vnoise(i * .4 + n, j * .4, 2) * .25; if (d > 1) continue; v.add(i, j, L, lerpHex(0xb9a3e4, 0xf1e6ff, L / 4 * .8 + hash(i, j, n) * .2)); } }
-    const m = v.build(cm, { shadow: false, jit: 0.02 }); m.position.set(Math.cos(a) * dist, -25 + rnd() * 9, Math.sin(a) * dist); scene.add(m); clouds.push({ m, sp: 0.1 + rnd() * 0.25 });
-  } }
 
 // =====================================================================
 // lights
@@ -475,7 +449,7 @@ function rebuildFurniture() {
   if (furnMesh) { house.remove(furnMesh, glowMesh, tvMesh); for (const m of [furnMesh, glowMesh, tvMesh]) { m.geometry.dispose(); m.dispose(); } }
   furnMesh = furn.build(voxMat, { jit: 0.04 }); glowMesh = glow.build(glowMat, { shadow: false, jit: 0 }); tvMesh = tvV.build(tvMat, { shadow: false, jit: 0 });
   house.add(furnMesh, glowMesh, tvMesh);
-  buildFloor(); rebuildNav();
+  buildFloor(); rebuildNav(); shadowDirty = 3;
   for (const c of chars) { leaveSpot(c); c.plan = null; c.path = null; c.state = 'idle'; c.timer = 0.4; if (!isWalk(...pos2(c))) { const [ci, cj] = pos2(c), n = walkList.reduce((best, q) => Math.hypot(q[0] - ci, q[1] - cj) < Math.hypot(best[0] - ci, best[1] - cj) ? q : best, walkList[0]); c.pos.set(n[0] * S, 0, n[1] * S); } }
 }
 // edit API (future interior-edit UI): move / rotate / add / remove, validated against walls and other furniture
@@ -748,7 +722,7 @@ function spawnChar(def, at) {
   const el = document.createElement('div'); el.className = 'bubble'; bubbleLayer.appendChild(el);
   const nm = document.createElement('div'); nm.className = 'name'; nm.textContent = def.name; bubbleLayer.appendChild(nm);
   const [si, sj] = at || pick(walkList);
-  const ch = { def, sp, sh, tex, mat, el, nm, pos: new THREE.Vector3(si * S, 0, sj * S), path: null, pi: 0, state: 'idle', timer: 0.5 + Math.random() * 2, kind: 'wander', spot: null, pose: 'stand', spotY: FLOOR, face: new THREE.Vector2(0, 1), phase: Math.random() * 5, say: '', sayT: 0, chatCd: 3 + Math.random() * 6, speed: 1.2 + Math.random() * 0.3, hidden: false, act: ACT_TXT.idle, forced: false };
+  const ch = { def, sp, sh, tex, mat, el, nm, pos: new THREE.Vector3(si * S, 0, sj * S), path: null, pi: 0, state: 'idle', timer: 0.5 + Math.random() * 2, kind: 'wander', spot: null, pose: 'stand', spotY: FLOOR, face: new THREE.Vector2(0, 1), phase: Math.random() * 5, say: '', sayT: 0, chatCd: 3 + Math.random() * 6, speed: 0.85 + Math.random() * 0.2, hidden: false, act: ACT_TXT.idle, forced: false };
   sp.userData.char = ch; chars.push(ch); return ch;
 }
 function removeChar(ch) { scene.remove(ch.sp); scene.remove(ch.sh); ch.el.remove(); ch.nm.remove(); ch.tex.dispose(); chars.splice(chars.indexOf(ch), 1); if (selected === ch) selected = null; }
@@ -877,11 +851,14 @@ function updateOverlay() {
   for (const c of chars) {
     tmpV.set(c.pos.x, c.topY ?? 2.2, c.pos.z).project(camera);
     const vis = !c.hidden && tmpV.z < 1 && Math.abs(tmpV.x) < 1.1 && Math.abs(tmpV.y) < 1.1;
-    const x = (tmpV.x * .5 + .5) * W, y = (-tmpV.y * .5 + .5) * H;
-    c.el.style.left = x + 'px'; c.el.style.top = (y - 2) + 'px'; if (c.el.textContent !== c.say) c.el.textContent = c.say; c.el.classList.toggle('show', vis && c.sayT > 0);
-    c.nm.style.left = x + 'px'; c.nm.style.top = (y + 2) + 'px'; c.nm.classList.toggle('show', vis && (settings.names || c === selected));
+    const x = Math.round((tmpV.x * .5 + .5) * W), y = Math.round((-tmpV.y * .5 + .5) * H);
+    if (c._x !== x || c._y !== y) { c.el.style.left = x + 'px'; c.el.style.top = (y - 2) + 'px'; c.nm.style.left = x + 'px'; c.nm.style.top = (y + 2) + 'px'; c._x = x; c._y = y; }
+    if (c.el.textContent !== c.say) c.el.textContent = c.say;
+    const sb = vis && c.sayT > 0, sn = vis && (settings.names || c === selected);
+    if (c._sb !== sb) { c.el.classList.toggle('show', sb); c._sb = sb; }
+    if (c._sn !== sn) { c.nm.classList.toggle('show', sn); c._sn = sn; }
   }
-  if (settings.roomtag) for (const r in ROOMTAG_POS) { tmpV.set(ROOMTAG_POS[r][0] * S, 0.4, ROOMTAG_POS[r][1] * S).project(camera); roomTagEls[r].style.left = (tmpV.x * .5 + .5) * W + 'px'; roomTagEls[r].style.top = (-tmpV.y * .5 + .5) * H + 'px'; }
+  if (settings.roomtag) for (const r in ROOMTAG_POS) { tmpV.set(ROOMTAG_POS[r][0] * S, 0.4, ROOMTAG_POS[r][1] * S).project(camera); const x = Math.round((tmpV.x * .5 + .5) * W), y = Math.round((-tmpV.y * .5 + .5) * H), el = roomTagEls[r]; if (el._x !== x || el._y !== y) { el.style.left = x + 'px'; el.style.top = y + 'px'; el._x = x; el._y = y; } }
 }
 const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(); let down = null;
 renderer.domElement.addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; });
@@ -985,45 +962,104 @@ function addByName(name) {
   spawnChar(def, [-7, 14]); cast = chars.map(c => c.def); store.set('house.cast.v1', cast); renderCast(); renderScene(); return true;
 }
 // --- settings ---
+const QUALITY = { low: { pr: 1, shadow: 0, bloom: false, fxaa: false, fps: 30 }, mid: { pr: 1.25, shadow: 1024, bloom: true, fxaa: true, fps: 60 }, high: { pr: 2, shadow: 2048, bloom: true, fxaa: true, fps: 60 } };
+const QUALITY_KO = { low: '낮음', mid: '보통', high: '높음' };
+const BG_PRESETS = ['#241a3a', '#000000', '#ffffff', '#f3e9dc', '#2f3a4a', '#6f4a8a', '#a8d8e8', '#f4b6c8', '#cfe8c8'];
+let bgImg = null;
+const bgUniforms = { tDiffuse: { value: null }, tBg: { value: null }, bgColor: { value: new THREE.Vector3(.14, .1, .23) }, hasImg: { value: 0 }, mode: { value: 0 }, tilePx: { value: 160 }, imgAspect: { value: 1 }, res: { value: new THREE.Vector2(VW(), VH()) } };
+function applyBackground() {
+  const hex = parseInt(String(settings.bgColor).slice(1), 16) || 0;
+  bgUniforms.bgColor.value.set(((hex >> 16) & 255) / 255, ((hex >> 8) & 255) / 255, (hex & 255) / 255);
+  bgUniforms.hasImg.value = bgImg ? 1 : 0; bgUniforms.tBg.value = bgImg; bgUniforms.mode.value = settings.bgMode === 'tile' ? 1 : 0; bgUniforms.tilePx.value = settings.bgTile * renderer.getPixelRatio();
+  $('#bgImgOpts').style.display = bgImg ? 'block' : 'none'; $('#bgTileVal').textContent = settings.bgTile; $('#bgColor').value = settings.bgColor;
+  $$('#bgImgOpts [data-bm]').forEach(b => b.classList.toggle('on', b.dataset.bm === settings.bgMode));
+}
+function setBgImage(img, persist) {   // downscale, keep the pixels as-is (the last pass writes display values directly)
+  const k = Math.min(1, 1280 / Math.max(img.width, img.height)), cv = document.createElement('canvas'); cv.width = Math.max(1, Math.round(img.width * k)); cv.height = Math.max(1, Math.round(img.height * k));
+  cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height);
+  if (bgImg) bgImg.dispose();
+  bgImg = new THREE.CanvasTexture(cv); bgImg.colorSpace = THREE.NoColorSpace; bgImg.wrapS = bgImg.wrapT = THREE.RepeatWrapping; bgImg.minFilter = THREE.LinearMipmapLinearFilter; bgImg.generateMipmaps = true; bgImg.needsUpdate = true;
+  bgUniforms.imgAspect.value = cv.width / cv.height;
+  if (persist) { try { localStorage.setItem('house.bgimg.v1', cv.toDataURL('image/jpeg', 0.85)); } catch (e) { toast('이미지가 너무 커서 저장은 못 했어요 (이번에만 적용)'); } }
+  applySettings();
+}
+function applyQuality() {
+  const q = QUALITY[settings.quality] || QUALITY.mid, pr = Math.min(window.devicePixelRatio || 1, q.pr);
+  renderer.setPixelRatio(pr); composer.setPixelRatio(pr);
+  fxaaPass.enabled = q.fxaa;
+  renderer.shadowMap.enabled = q.shadow > 0; key.castShadow = q.shadow > 0; voxMat.needsUpdate = true;
+  if (q.shadow) { key.shadow.mapSize.set(q.shadow, q.shadow); if (key.shadow.map) { key.shadow.map.dispose(); key.shadow.map = null; } }
+  bloom.enabled = settings.bloom && q.bloom; shadowDirty = 3; onResize();
+}
 function applySettings() {
   R.classList.toggle('nobubble', !settings.bubble); R.classList.toggle('noroomtag', !settings.roomtag);
-  bloom.enabled = settings.bloom; controls.autoRotate = settings.rotate; $('#spdVal').textContent = (+settings.speed).toFixed(1);
-  $$('#setTod .chip').forEach(b => b.classList.toggle('on', b.dataset.m === mode)); store.set('house.settings.v1', { ...settings, mode });
+  const q = QUALITY[settings.quality] || QUALITY.mid; bloom.enabled = settings.bloom && q.bloom; controls.autoRotate = settings.rotate; $('#spdVal').textContent = (+settings.speed).toFixed(1);
+  $$('#setTod .chip').forEach(b => b.classList.toggle('on', b.dataset.m === mode)); $$('#setQuality .chip').forEach(b => b.classList.toggle('on', b.dataset.q === settings.quality));
+  applyBackground(); store.set('house.settings.v1', { ...settings, mode });
 }
 { const el = $('#setTod'); [['dusk', '🌇 노을'], ['night', '🌙 밤'], ['day', '☀️ 낮']].forEach(([m, l]) => { const b = document.createElement('button'); b.className = 'chip'; b.dataset.m = m; b.textContent = l; b.onclick = () => { mode = m; applySettings(); }; el.appendChild(b); }); }
+{ const el = $('#setQuality'); for (const k in QUALITY) { const b = document.createElement('button'); b.className = 'chip'; b.dataset.q = k; b.textContent = QUALITY_KO[k]; b.onclick = () => { settings.quality = k; applyQuality(); applySettings(); }; el.appendChild(b); } }
 const bind = (id, key, num) => { const el = $(id); if (el.type === 'checkbox') el.checked = !!settings[key]; else el.value = settings[key]; el.oninput = () => { settings[key] = el.type === 'checkbox' ? el.checked : +el.value; applySettings(); }; };
 bind('#setBubble', 'bubble'); bind('#setRoomTag', 'roomtag'); bind('#setNames', 'names'); bind('#setBloom', 'bloom'); bind('#setAuto', 'auto'); bind('#setRotate', 'rotate'); bind('#setSpeed', 'speed');
+{ const sw = $('#bgSwatches'); BG_PRESETS.forEach(c => { const b = document.createElement('button'); b.className = 'sw'; b.style.background = c; b.onclick = () => { settings.bgColor = c; applySettings(); }; sw.appendChild(b); }); }
+$('#bgColor').oninput = (e) => { settings.bgColor = e.target.value; applySettings(); };
+$('#bgImgBtn').onclick = () => $('#bgFile').click();
+$('#bgFile').onchange = (e) => { const f = e.target.files && e.target.files[0]; e.target.value = ''; if (!f) return; const url = URL.createObjectURL(f), img = new Image(); img.onload = () => { setBgImage(img, true); URL.revokeObjectURL(url); }; img.onerror = () => toast('이미지를 열 수 없어요'); img.src = url; };
+$('#bgImgClear').onclick = () => { if (bgImg) { bgImg.dispose(); bgImg = null; } try { localStorage.removeItem('house.bgimg.v1'); } catch (e) { /* ignore */ } applySettings(); };
+$$('#bgImgOpts [data-bm]').forEach(b => { b.onclick = () => { settings.bgMode = b.dataset.bm; applySettings(); }; });
+$('#bgTile').value = settings.bgTile; $('#bgTile').oninput = (e) => { settings.bgTile = +e.target.value; applySettings(); };
 $('#resetCast').onclick = () => { if (!confirm('캐릭터를 기본 4명으로 되돌릴까요?')) return; [...chars].forEach(removeChar); cast = DEFAULTS.map(d => ({ ...d })); store.set('house.cast.v1', cast); cast.forEach(d => spawnChar({ ...d })); renderCast(); renderScene(); };
 
 // =====================================================================
-// post + loop
+// post + loop   (background is composited in the LAST pass: the scene is rendered with alpha, so the picked colour/image stays exact)
 // =====================================================================
-const rt = new THREE.WebGLRenderTarget(VW() * renderer.getPixelRatio(), VH() * renderer.getPixelRatio(), { type: THREE.HalfFloatType, samples: 4 });
+const rt = new THREE.WebGLRenderTarget(VW() * renderer.getPixelRatio(), VH() * renderer.getPixelRatio(), { type: THREE.HalfFloatType });
 const composer = new EffectComposer(renderer, rt);
 composer.addPass(new RenderPass(scene, camera));
 const bloom = new UnrealBloomPass(new THREE.Vector2(VW(), VH()), 0.45, 0.55, 0.62); composer.addPass(bloom);
+{ // UnrealBloomPass writes alpha=1 everywhere; keep the scene's own alpha so the background pass can still tell empty space from the house
+  const bm = bloom.blendMaterial; bm.blending = THREE.CustomBlending; bm.blendEquation = THREE.AddEquation; bm.blendSrc = THREE.SrcAlphaFactor; bm.blendDst = THREE.OneFactor; bm.blendSrcAlpha = THREE.ZeroFactor; bm.blendDstAlpha = THREE.OneFactor; bm.needsUpdate = true;
+}
 const vig = new ShaderPass(VignetteShader); vig.uniforms.offset.value = 1.0; vig.uniforms.darkness.value = 1.0; composer.addPass(vig);
 composer.addPass(new OutputPass());
+composer.addPass(new ShaderPass(new THREE.ShaderMaterial({
+  uniforms: bgUniforms,
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `uniform sampler2D tDiffuse, tBg; uniform vec3 bgColor; uniform float hasImg, mode, tilePx, imgAspect; uniform vec2 res; varying vec2 vUv;
+    void main(){
+      vec4 s = texture2D(tDiffuse, vUv); vec3 bg = bgColor;
+      if (hasImg > 0.5) {
+        vec2 uv;
+        if (mode < 0.5) { float ra = res.x / res.y; vec2 sc = ra > imgAspect ? vec2(1.0, imgAspect / ra) : vec2(ra / imgAspect, 1.0); uv = (vUv - 0.5) * sc + 0.5; }
+        else { uv = vec2(vUv.x * res.x / tilePx, vUv.y * res.y / (tilePx / imgAspect)); }
+        bg = texture2D(tBg, uv).rgb;
+      }
+      gl_FragColor = vec4(s.rgb + bg * (1.0 - clamp(s.a, 0.0, 1.0)), 1.0);
+    }`,
+})));
+
+const fxaaPass = new ShaderPass(FXAAShader); composer.addPass(fxaaPass);   // last: smooths the final picture (background included)
 
 cast.forEach(d => spawnChar({ ...d }));
-applySettings();
 
 function applyEnv() {
-  skyMat.uniforms.discK.value = cur.discK;
-  scene.fog.color.copy(cur.fog); scene.fog.density = cur.den;
   key.color.copy(cur.keyCol); key.intensity = cur.keyInt; key.position.copy(cur.key).normalize().multiplyScalar(50); key.target.position.set(0, 0, 0);
   hemi.color.copy(cur.hSky); hemi.groundColor.copy(cur.hGnd); hemi.intensity = cur.hInt;
-  glowMat.color.setScalar(cur.glow); winMat.color.copy(cur.win); starMat.opacity = cur.stars; bloom.strength = cur.bloom; renderer.toneMappingExposure = cur.expo;
-  seaMat.color.copy(cur.fog).multiplyScalar(1.12).lerp(cur.hor, 0.08);
+  glowMat.color.setScalar(cur.glow); winMat.color.copy(cur.win); bloom.strength = cur.bloom; renderer.toneMappingExposure = cur.expo;
   for (const l of lampLights) l.intensity = 9 * cur.lamp;
 }
-let last = performance.now() / 1000, T = 0;
+let last = performance.now() / 1000, T = 0, lastKey = 0;
 function frame() {
-  const now = performance.now() / 1000, dt = Math.min(0.05, now - last); last = now; T += dt;
+  const now = performance.now() / 1000;
+  if (paused || document.hidden) { last = now; return; }
+  const q = QUALITY[settings.quality] || QUALITY.mid;
+  if (q.fps < 60 && now - last < 1 / q.fps - 0.004) return;
+  const dt = Math.min(0.05, now - last); last = now; T += dt;
   stepEnv(dt); applyEnv();
+  const kk = cur.key.x + cur.key.y * 3 + cur.key.z * 7 + cur.keyInt * 11; if (Math.abs(kk - lastKey) > 1e-4) { lastKey = kk; shadowDirty = Math.max(shadowDirty, 1); }
+  if (shadowDirty > 0) { renderer.shadowMap.needsUpdate = true; shadowDirty--; }
   const tvOn = chars.some(c => c.spot && c.spot.kind === 'tv' && c.state === 'act');
   tvMat.color.set(tvOn ? lerpHex(0x5ab0ff, 0xffd0a0, (Math.sin(T * 3) * .5 + .5) * (Math.sin(T * 1.3) * .5 + .5)) : 0x14141c).multiplyScalar(tvOn ? 1.2 + cur.glow * 0.3 : 1);
-  clouds.forEach(c => { c.m.position.x += c.sp * dt; if (c.m.position.x > 160) c.m.position.x = -160; });
   let a = steam.geometry.attributes.position; const se = emitters.find(e => e.type === 'steam'), cooking = !!se && chars.some(c => c.spot && c.spot.steam && c.state === 'act');
   steamS.forEach((s, q) => { s.t += dt * (cooking ? .6 : 0); if (s.t > 3) s.t = 0; a.setXYZ(q, se ? se.x + Math.sin(s.t * 2 + q) * .2 : 0, cooking ? se.y + s.t * .6 : -50, se ? se.z + Math.cos(s.t + q) * .15 : 0); }); a.needsUpdate = true;
   a = dust.geometry.attributes.position; dustS.forEach((d, q) => a.setXYZ(q, d.x + Math.sin(T * d.sp + d.ph) * .8, d.y + Math.sin(T * d.sp * 1.4 + d.ph) * .4, d.z + Math.cos(T * d.sp * .7 + d.ph) * .6)); a.needsUpdate = true;
@@ -1032,13 +1068,16 @@ function frame() {
   if (selected && !selected.hidden) controls.target.lerp(tmpV.set(selected.pos.x, 1.2, selected.pos.z), 0.05); else controls.target.lerp(tmpV.set(0, 1.5, 0.5), 0.04);
   controls.update(); composer.render();
 }
-renderer.setAnimationLoop(frame);
-const onResize = () => { if (!VW() || !VH()) return; renderer.setSize(VW(), VH()); composer.setSize(VW(), VH()); camera.aspect = VW() / VH(); camera.updateProjectionMatrix(); }; const ro = new ResizeObserver(onResize); ro.observe(R);
-const api = { addByName, placeOf, placeIsRoom, do: doAction, chars, setMode: (m) => { mode = m; stepEnv(0, true); applySettings(); }, KEYWORDS, interpret, applyStory, tick: (sec, dt = 0.05) => { for (let q = 0; q < sec / dt; q++) { T += dt; stepChars(T, dt); } return chars.map(c => c.def.name + ':' + c.state + ':' + c.kind + ':' + c.pos.x.toFixed(1) + ',' + c.pos.z.toFixed(1)).join(' '); }, camera, controls, showPanel, layout: LAYOUT, catalog: CATALOG, rebuild: rebuildFurniture, move: moveFurniture, add: addFurniture, remove: removeFurniture, spots: () => SPOTS };
+const onResize = () => { if (!VW() || !VH()) return; renderer.setSize(VW(), VH()); composer.setSize(VW(), VH()); camera.aspect = VW() / VH(); camera.updateProjectionMatrix(); bgUniforms.res.value.set(VW() * renderer.getPixelRatio(), VH() * renderer.getPixelRatio()); fxaaPass.material.uniforms['resolution'].value.set(1 / (VW() * renderer.getPixelRatio()), 1 / (VH() * renderer.getPixelRatio())); applyBackground(); };
+const ro = new ResizeObserver(onResize); ro.observe(R);
+const api = { addByName, placeOf, placeIsRoom, do: doAction, chars, setMode: (m) => { mode = m; stepEnv(0, true); applySettings(); }, KEYWORDS, interpret, applyStory, tick: (sec, dt = 0.05) => { for (let q = 0; q < sec / dt; q++) { T += dt; stepChars(T, dt); } return chars.map(c => c.def.name + ':' + c.state + ':' + c.kind + ':' + c.pos.x.toFixed(1) + ',' + c.pos.z.toFixed(1)).join(' '); }, camera, controls, showPanel, layout: LAYOUT, catalog: CATALOG, rebuild: rebuildFurniture, move: moveFurniture, add: addFurniture, remove: removeFurniture, spots: () => SPOTS, three: { renderer, composer, scene, bloom }, pause: (p) => { paused = !!p; last = performance.now() / 1000; } };
 api.destroy = () => { alive = false; renderer.setAnimationLoop(null); ro.disconnect(); clearInterval(castTimer); window.removeEventListener('message', onMsg); for (const c of [...chars]) removeChar(c); renderer.dispose(); sr.innerHTML = ''; if (opts.global && window[opts.global] === api) delete window[opts.global]; };
 api.resize = onResize;
 if (opts.global) window[opts.global] = api;
 
+applyQuality(); applySettings();
+try { const saved = localStorage.getItem('house.bgimg.v1'); if (saved) { const img = new Image(); img.onload = () => setBgImage(img, false); img.src = saved; } } catch (e) { /* ignore */ }
+renderer.setAnimationLoop(frame);
 requestAnimationFrame(() => requestAnimationFrame(() => { api.ready = true; window.__ready = true; }));
 
   return api;

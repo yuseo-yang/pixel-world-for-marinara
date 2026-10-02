@@ -57,7 +57,7 @@ import { mount } from '../../src/app.js';
     if (full) { saved = wrap.style.cssText; wrap.style.cssText += ';left:24px;top:24px;right:24px;bottom:24px;width:auto;height:auto;resize:none'; } else { wrap.style.cssText = saved; }
     app.resize();
   };
-  $('#pw-min').onclick = () => { mini = !mini; $('#pw-island').style.display = mini ? 'none' : ''; $('#pw-log').style.display = mini ? 'none' : ''; wrap.style.height = mini ? 'auto' : cfg.h + 'px'; wrap.style.minHeight = mini ? '0' : '280px'; wrap.style.resize = mini ? 'none' : 'both'; };
+  $('#pw-min').onclick = () => { mini = !mini; app.pause(mini); $('#pw-island').style.display = mini ? 'none' : ''; $('#pw-log').style.display = mini ? 'none' : ''; wrap.style.height = mini ? 'auto' : cfg.h + 'px'; wrap.style.minHeight = mini ? '0' : '280px'; wrap.style.resize = mini ? 'none' : 'both'; };
   $('#pw-set').onclick = () => { const c = $('#pw-cfg'); c.style.display = c.style.display === 'none' ? 'block' : 'none'; };
   $('#pw-x').onclick = () => destroy();
   $('#pw-field').value = cfg.field; $('#pw-chat').value = cfg.chatId; $('#pw-poll').checked = cfg.poll; $('#pw-sec').value = cfg.sec; $('#pw-add').checked = cfg.autoAdd;

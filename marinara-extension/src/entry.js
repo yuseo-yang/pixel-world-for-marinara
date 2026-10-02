@@ -106,7 +106,7 @@ import { mount } from '../../src/app.js';
         if (last.get(name) === text) continue; last.set(name, text);
         if (!app.chars.some(c => c.def.name === name)) { if (cfg.autoAdd && app.addByName(name)) note('섬에 ' + name + ' 추가'); else { note("섬에 '" + name + "'이(가) 없어요"); continue; } }
         const hits = app.interpret(text).filter(x => x.action), hit = hits[hits.length - 1];
-        if (hit) { app.do(name, hit.action); note(name + ' ← "' + text.slice(0, 30) + '" → ' + hit.action + " ('" + hit.keyword + "')"); log('tracker', name, text, hit.action); }
+        if (hit) { app.do(name, hit.action, hit.action === 'intimate' ? hit.who.find(n => n !== name && n !== '*') : undefined); note(name + ' ← "' + text.slice(0, 30) + '" → ' + hit.action + " ('" + hit.keyword + "')"); log('tracker', name, text, hit.action); }
         else note(name + ' ← "' + text.slice(0, 30) + '" → 해당 행동 없음');
       }
       dot('트래커 연결됨 · 필드 ' + rows.length + '개 중 행동 ' + byOwner.size + '명');

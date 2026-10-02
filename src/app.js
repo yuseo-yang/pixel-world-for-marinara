@@ -541,7 +541,7 @@ const FLOOR = 0.25;
 let SPOTS = [];   // rebuilt from the furniture layout (slots) + architecture (windows, front door)
 rebuildFurniture();
 const ACT_KINDS = ['cook', 'eat', 'sleep', 'view', 'dress', 'bath', 'wash', 'tv', 'read', 'out'];
-const ACT_KO = { sleep: '잠자기', tv: 'TV 보기', cook: '요리', eat: '식사', bath: '목욕', wash: '씻기·빨래', read: '독서', view: '창밖 구경', dress: '옷 고르기', out: '외출', chat: '대화' };
+const ACT_KO = { sleep: '잠자기', tv: 'TV 보기', cook: '요리', eat: '식사', bath: '목욕', wash: '씻기·빨래', read: '독서', view: '창밖 구경', dress: '옷 고르기', out: '외출', chat: '대화', intimate: '19♥' };
 const GO_KO = { kitchen: '주방', living: '거실', bedroom: '안방', bath: '화장실' };
 // words the future Marinara extension will map onto actions
 const KEYWORDS = { sleep: ['잠', '자다', '침대', '꿈', 'sleep'], tv: ['tv', '티비', '텔레비전', '소파'], cook: ['요리', '부엌', '주방', 'cook'], eat: ['식사', '밥', '먹', 'eat'], bath: ['목욕', '욕조', 'bath'], wash: ['씻', '세수', '양치', '빨래'], read: ['책', '독서'], view: ['창밖', '창문'], out: ['외출', '나가', '산책'], chat: ['대화', '수다', '이야기'] };
@@ -562,13 +562,15 @@ const ACTION_WORDS = [
 ];
 // weaker hints: where someone is, when no activity word matched
 const PLACE_WORDS = [['sleep', ['침대', '이불']], ['tv', ['소파']], ['eat', ['식탁']], ['cook', ['싱크대', '가스레인지', '레인지']], ['bath', ['욕조']], ['wash', ['세면대', '세탁기']], ['read', ['책장', '서재']], ['view', ['창가']]];
+const NSFW_WORDS = ['섹스', '성관계', '정사', '잠자리를', '몸을 섞', '애무', '알몸', '나체', '옷을 벗', '벗겼', '절정', '삽입', '쾌감', '오르가', 'sex', 'nsfw', 'naked', 'orgasm', 'moan'];
 const ROOM_WORDS = [['goto_kitchen', ['주방', '부엌']], ['goto_living', ['거실']], ['goto_bedroom', ['안방', '침실']], ['goto_bath', ['화장실', '욕실']]];
 function interpret(text) {
   const out = [];
   for (const m of String(text).matchAll(/[^.!?\n]+[.!?]?/g)) {
     const sent = m[0].trim(); if (!sent) continue; const low = sent.toLowerCase();
     let action = null, kw = null;
-    for (const [a, ws] of ACTION_WORDS) { const w = ws.find(w => low.includes(w)); if (w) { action = a; kw = w; break; } }
+    const adult = NSFW_WORDS.find(w => low.includes(w)); if (adult) { action = 'intimate'; kw = adult; }
+    if (!action) for (const [a, ws] of ACTION_WORDS) { const w = ws.find(w => low.includes(w)); if (w) { action = a; kw = w; break; } }
     if (!action) for (const [a, ws] of PLACE_WORDS) { const w = ws.find(w => low.includes(w)); if (w) { action = a; kw = w; break; } }
     if (!action) for (const [a, ws] of ROOM_WORDS) { const w = ws.find(w => low.includes(w)); if (w) { action = a; kw = w; break; } }
     const names = chars.filter(c => sent.includes(c.def.name)).map(c => c.def.name);
@@ -579,7 +581,8 @@ function interpret(text) {
 function applyStory(text) {
   const res = interpret(text);
   for (const r of res) if (r.action) {
-    if (r.action === 'chat' && r.who.length >= 2) doAction(r.who[0], 'chat', r.who[1]); else for (const w of r.who) doAction(w, r.action);
+    if (r.action === 'intimate') { if (r.who[0] !== '*') doAction(r.who[0], 'intimate', r.who[1]); }
+    else if (r.action === 'chat' && r.who.length >= 2) doAction(r.who[0], 'chat', r.who[1]); else for (const w of r.who) doAction(w, r.action);
   }
   return res;
 }
@@ -751,6 +754,8 @@ function arrive(c) {
     if (sp.kind === 'out') { c.hidden = true; c.timer = 10 + Math.random() * 14; }
     else c.timer = sp.kind === 'sleep' ? 22 + Math.random() * 20 : sp.kind === 'bath' ? 14 + Math.random() * 10 : 10 + Math.random() * 14;
     if (Math.random() < .85) speak(c, sp.say);
+  } else if (c.kind === 'intimate') {   // adult scenes are never drawn: the two just stand close with a "19♥" bubble
+    c.timer = 20 + Math.random() * 8; c.say = '19♥'; c.sayT = c.timer; c.act = '둘만의 시간 (19♥)'; if (c.partner) faceToward(c, c.partner.pos.x, c.partner.pos.z);
   } else { c.timer = 0.8 + Math.random() * 2; if (Math.random() < .3) speak(c, SAYS.wander); }
 }
 function startChat(a, b) {
@@ -807,6 +812,15 @@ function doAction(who, action, partner) {
       const o = (partner && findChars(partner)[0]) || chars.filter(x => x !== c && !x.hidden).sort((p, q) => Math.hypot(p.pos.x - c.pos.x, p.pos.z - c.pos.z) - Math.hypot(q.pos.x - c.pos.x, q.pos.z - c.pos.z))[0]; if (!o) continue;
       leaveSpot(o); o.state = 'idle'; o.timer = 3; const [oi, oj] = pos2(o); const near = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]].map(([a, b]) => [oi + a, oj + b]).filter(([i, j]) => isWalk(i, j));
       if (near.length && goCell(c, ...near[0], '대화하러 가는 중', true)) { c.kind = 'chat'; c.partner = o; c.chatCd = 0; o.chatCd = 0; }
+    } else if (action === 'intimate') {
+      if (c.kind === 'intimate' && c.state !== 'idle') continue;
+      const o = (partner && findChars(partner)[0]) || chars.filter(x => x !== c && !x.hidden).sort((p, q) => Math.hypot(p.pos.x - c.pos.x, p.pos.z - c.pos.z) - Math.hypot(q.pos.x - c.pos.x, q.pos.z - c.pos.z))[0]; if (!o || o === c) continue;
+      const bed = SPOTS.find(s => s.kind === 'sleep'), base = bed ? bed.walk : [0, 3];
+      const cells = [[0, 0], [1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, 1]].map(([a, b]) => [base[0] + a, base[1] + b]).filter(([i, j]) => isWalk(i, j)); if (cells.length < 2) continue;
+      for (const [p, cell, mate] of [[c, cells[0], o], [o, cells[1], c]]) {
+        const ok = goCell(p, cell[0], cell[1], '둘만의 시간 (19♥)', true); p.kind = 'intimate'; p.partner = mate; p.chatCd = 90;
+        if (!ok) { p.plan = { spot: null }; arrive(p); }
+      }
     } else if (action.startsWith('goto_')) {
       const room = action.slice(5), list = roomCells[room]; if (!list) continue; const [ti, tj] = pick(list); goCell(c, ti, tj, ROOM_KO[room] + '(으)로 이동 중', true);
     } else if (ACT_KINDS.includes(action)) {

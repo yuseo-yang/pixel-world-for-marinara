@@ -101,6 +101,10 @@
     <h3>누구에게?</h3><select id="sceneWho"></select>
     <h3>이동</h3><div class="row" id="sceneGo"></div>
     <h3>행동</h3><div class="row" id="sceneAct"></div>
+    <h3>이야기 읽기 테스트</h3>
+    <textarea id="storyIn" rows="4" placeholder="예) 모리는 소파에 앉아 TV를 봤다. 별이는 졸려서 침대로 갔다." style="width:100%;box-sizing:border-box;background:rgba(0,0,0,.3);color:#fff;border:2px solid var(--bd);padding:6px 8px;font:inherit;font-size:13px;resize:vertical"></textarea>
+    <div class="row" style="margin-top:6px"><button class="btn" id="storyGo">읽고 반응하기</button><button class="btn sub" id="storyEx">예시 넣기</button></div>
+    <div id="storyOut" style="margin-top:8px;font-size:12px;line-height:1.55"></div>
     <p style="font-size:11px;opacity:.7;margin-top:16px;line-height:1.5">나중에 마리나라 확장에서 <code>postMessage({type:'scene', who:'모리', action:'sleep'})</code> 로 같은 명령을 보낼 수 있게 해 둔 자리예요.</p>
   </div>
 
@@ -550,6 +554,42 @@ const GO_KO = { kitchen: '주방', living: '거실', bedroom: '안방', bath: '�
 // words the future Marinara extension will map onto actions
 const KEYWORDS = { sleep: ['잠', '자다', '침대', '꿈', 'sleep'], tv: ['tv', '티비', '텔레비전', '소파'], cook: ['요리', '부엌', '주방', 'cook'], eat: ['식사', '밥', '먹', 'eat'], bath: ['목욕', '욕조', 'bath'], wash: ['씻', '세수', '양치', '빨래'], read: ['책', '독서'], view: ['창밖', '창문'], out: ['외출', '나가', '산책'], chat: ['대화', '수다', '이야기'] };
 
+// ---------- reading a story line: sentence -> who + what ----------
+const ACTION_WORDS = [
+  ['sleep', ['잠', '자러', '자고', '잔다', '잤', '졸', '침대에 누', '눕', '꿈나라', '취침', 'sleep']],
+  ['tv', ['tv', '티비', '텔레비전', '소파', '드라마', '영화']],
+  ['cook', ['요리', '끓', '볶', '설거지', '부엌에서', 'cook']],
+  ['eat', ['식사', '밥', '먹', '식탁', '간식', '점심', '저녁을', '아침을']],
+  ['bath', ['목욕', '샤워', '욕조', 'bath']],
+  ['wash', ['세수', '양치', '씻', '빨래', '세탁']],
+  ['read', ['독서', '책을', '책장', '읽']],
+  ['dress', ['갈아입', '옷장', '옷을']],
+  ['view', ['창밖', '창문', '노을', '구경']],
+  ['out', ['외출', '나갔', '나가', '산책', '집을 나', '장보']],
+  ['chat', ['대화', '수다', '얘기', '말을 걸', '이야기를 나', '속삭']],
+];
+const ROOM_WORDS = [['goto_kitchen', ['주방', '부엌']], ['goto_living', ['거실']], ['goto_bedroom', ['안방', '침실']], ['goto_bath', ['화장실', '욕실']]];
+function interpret(text) {
+  const out = [];
+  for (const m of String(text).matchAll(/[^.!?\n]+[.!?]?/g)) {
+    const sent = m[0].trim(); if (!sent) continue; const low = sent.toLowerCase();
+    let action = null, kw = null;
+    for (const [a, ws] of ACTION_WORDS) { const w = ws.find(w => low.includes(w)); if (w) { action = a; kw = w; break; } }
+    if (!action) for (const [a, ws] of ROOM_WORDS) { const w = ws.find(w => low.includes(w)); if (w) { action = a; kw = w; break; } }
+    const names = chars.filter(c => sent.includes(c.def.name)).map(c => c.def.name);
+    out.push({ sentence: sent, who: names.length ? names : ['*'], action, keyword: kw });
+  }
+  return out;
+}
+function applyStory(text) {
+  const res = interpret(text);
+  for (const r of res) if (r.action) {
+    if (r.action === 'chat' && r.who.length >= 2) doAction(r.who[0], 'chat', r.who[1]); else for (const w of r.who) doAction(w, r.action);
+  }
+  return res;
+}
+const actLabel = (a) => a.startsWith('goto_') ? GO_KO[a.slice(5)] + '(으)로 이동' : (ACT_KO[a] || a);
+
 // =====================================================================
 // pixel-art sprites (generated in code)
 // =====================================================================
@@ -765,11 +805,11 @@ function stepChars(t, dt) {
 
 // ---------- external commands ----------
 function findChars(who) { if (!who || who === '*' || who === 'all') return chars.slice(); return chars.filter(c => c.def.name === who || c.def.id === who); }
-function doAction(who, action) {
+function doAction(who, action, partner) {
   const targets = findChars(who); if (!targets.length) return false;
   for (const c of targets) {
     if (action === 'chat') {
-      const o = chars.filter(x => x !== c && !x.hidden).sort((p, q) => Math.hypot(p.pos.x - c.pos.x, p.pos.z - c.pos.z) - Math.hypot(q.pos.x - c.pos.x, q.pos.z - c.pos.z))[0]; if (!o) continue;
+      const o = (partner && findChars(partner)[0]) || chars.filter(x => x !== c && !x.hidden).sort((p, q) => Math.hypot(p.pos.x - c.pos.x, p.pos.z - c.pos.z) - Math.hypot(q.pos.x - c.pos.x, q.pos.z - c.pos.z))[0]; if (!o) continue;
       leaveSpot(o); o.state = 'idle'; o.timer = 3; const [oi, oj] = pos2(o); const near = [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [-1, -1]].map(([a, b]) => [oi + a, oj + b]).filter(([i, j]) => isWalk(i, j));
       if (near.length && goCell(c, ...near[0], '대화하러 가는 중', true)) { c.kind = 'chat'; c.partner = o; c.chatCd = 0; o.chatCd = 0; }
     } else if (action.startsWith('goto_')) {
@@ -780,7 +820,7 @@ function doAction(who, action) {
   }
   return true;
 }
-window.addEventListener('message', (e) => { const d = e.data; if (d && d.type === 'scene' && typeof d.action === 'string') doAction(d.who, d.action); });
+window.addEventListener('message', (e) => { const d = e.data; if (d && d.type === 'scene' && typeof d.action === 'string') doAction(d.who, d.action); else if (d && d.type === 'story' && typeof d.text === 'string') applyStory(d.text); });
 
 // =====================================================================
 // overlay (bubbles / names / room tags)
@@ -885,6 +925,13 @@ function renderScene() {
   const mk = (el, obj, pre) => { el.innerHTML = ''; for (const k in obj) { const b = document.createElement('button'); b.className = 'chip'; b.textContent = obj[k]; b.onclick = () => doAction(sel.value, pre + k); el.appendChild(b); } };
   mk($('#sceneGo'), GO_KO, 'goto_'); mk($('#sceneAct'), ACT_KO, '');
 }
+$('#storyEx').onclick = () => { $('#storyIn').value = chars.slice(0, 3).map((c, n) => [c.def.name + '는 소파에 앉아 TV를 봤다.', c.def.name + '는 졸려서 침대로 가서 잠들었다.', c.def.name + '는 주방에서 요리를 시작했다.'][n]).join('\n'); };
+$('#storyGo').onclick = () => {
+  const res = applyStory($('#storyIn').value), box = $('#storyOut'); box.innerHTML = '';
+  if (!res.length) { box.textContent = '읽을 문장이 없어요.'; return; }
+  for (const r of res) { const d = document.createElement('div'); d.style.cssText = 'padding:4px 0;border-top:1px solid rgba(255,255,255,.15)';
+    d.textContent = r.action ? `✔ "${r.sentence}" → ${r.who.join(', ') === '*' ? '모두' : r.who.join(', ')}: ${actLabel(r.action)} (키워드 '${r.keyword}')` : `— "${r.sentence}" → 반응 없음`; box.appendChild(d); }
+};
 // --- settings ---
 function applySettings() {
   document.body.classList.toggle('nobubble', !settings.bubble); document.body.classList.toggle('noroomtag', !settings.roomtag);
@@ -935,7 +982,7 @@ function frame() {
 }
 renderer.setAnimationLoop(frame);
 addEventListener('resize', () => { if (!innerWidth || !innerHeight) return; renderer.setSize(innerWidth, innerHeight); composer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); });
-window.house = { do: doAction, chars, setMode: (m) => { mode = m; stepEnv(0, true); applySettings(); }, KEYWORDS, tick: (sec, dt = 0.05) => { for (let q = 0; q < sec / dt; q++) { T += dt; stepChars(T, dt); } return chars.map(c => c.def.name + ':' + c.state + ':' + c.kind + ':' + c.pos.x.toFixed(1) + ',' + c.pos.z.toFixed(1)).join(' '); }, camera, controls, showPanel, layout: LAYOUT, catalog: CATALOG, rebuild: rebuildFurniture, move: moveFurniture, add: addFurniture, remove: removeFurniture, spots: () => SPOTS };
+window.house = { do: doAction, chars, setMode: (m) => { mode = m; stepEnv(0, true); applySettings(); }, KEYWORDS, interpret, applyStory, tick: (sec, dt = 0.05) => { for (let q = 0; q < sec / dt; q++) { T += dt; stepChars(T, dt); } return chars.map(c => c.def.name + ':' + c.state + ':' + c.kind + ':' + c.pos.x.toFixed(1) + ',' + c.pos.z.toFixed(1)).join(' '); }, camera, controls, showPanel, layout: LAYOUT, catalog: CATALOG, rebuild: rebuildFurniture, move: moveFurniture, add: addFurniture, remove: removeFurniture, spots: () => SPOTS };
 requestAnimationFrame(() => requestAnimationFrame(() => { window.__ready = true; }));
 </script>
 </body>
